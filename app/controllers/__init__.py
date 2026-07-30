@@ -1,4 +1,4 @@
-from .governance_controller import GovernanceController
-from .dlq_controller import DLQController
+from .governance_controller import router as governance_router
+from .dlq_controller import router as dlq_router
 
-__all__ = ["GovernanceController", "DLQController"]
+__all__ = ["governance_router", "dlq_router"]
