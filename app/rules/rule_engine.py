@@ -151,7 +151,7 @@ class RuleEngine:
         warn_count = sum(1 for r in rule_evaluations if r.get("action") == RuleAction.WARN and r.get("triggered"))
         
         # Determine approval
-        approved = block_count == 0
+        approved = block_count == 0 and require_approval_count == 0
         
         # Determine status
         if block_count > 0:

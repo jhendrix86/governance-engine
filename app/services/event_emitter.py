@@ -207,7 +207,7 @@ class EventEmitter:
         mapping = {
             DecisionStatus.APPROVED: "governance.approved",
             DecisionStatus.REJECTED: "governance.rejected",
-            DecisionStatus.CONDITIONAL: "governance.approved",
+            DecisionStatus.CONDITIONAL: "governance.conditional",
             DecisionStatus.PENDING: "governance.request",
             DecisionStatus.OVERRIDDEN: "governance.override"
         }
