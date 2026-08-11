@@ -88,7 +88,15 @@ class TraceParent:
         return TraceParent(
             trace_context=child_trace_context,
             correlation_id=self.correlation_id or child_trace_context.trace_id,
-            causation_id=self.causation_id or self.trace_context.span_id,
+            # Causation always points at the immediate parent span, not
+            # "whatever causation_id happened to already be set" - the old
+            # `self.causation_id or ...` meant a span three levels deep
+            # would still report the *root's* causation_id (or None) as
+            # its own cause, once any ancestor had set one, instead of the
+            # span that actually, directly created it. correlation_id is
+            # correctly `or`-chained above (it should stay constant for
+            # the whole request); causation_id should not be.
+            causation_id=self.trace_context.span_id,
             parent_span_id=self.trace_context.span_id,
         )
 
