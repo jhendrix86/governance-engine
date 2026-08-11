@@ -5,7 +5,21 @@ from enum import Enum
 
 
 class RequestType(str, Enum):
-    """Governance request types."""
+    """
+    Governance request types.
+
+    `GovernanceCheckRequest.request_type` is a plain str, not constrained to
+    this enum at the API layer - these are the vocabulary this repo's own
+    rules (app/rules/*.py) actually key off via each Rule's `applies_to`
+    list, plus OPERATOR_EXECUTE below, added 2026-08-11 for empire_os's
+    generic operator-execution bridge (engines/governance_engine.py) - no
+    existing value fit without misrepresenting what empire_os's ~38 generic
+    operators actually are (they aren't funnel/product/resource events).
+    Only the two "*"-scoped rules (safety_rules.py, risk_rules.py) apply to
+    it today; no operator-specific rule exists yet, and none is invented
+    here - see governance-engine/README or CLAUDE.md if a real "which
+    operator types are allowed to run" policy is wanted later.
+    """
     FUNNEL_CREATE = "funnel.create_request"
     FUNNEL_LAUNCH = "funnel.launch_request"
     FUNNEL_MUTATION = "funnel.mutation_request"
@@ -22,6 +36,7 @@ class RequestType(str, Enum):
     STRATEGY_OVERRIDE = "strategy.override_request"
     EMERGENCY_STOP = "emergency.stop_request"
     EMERGENCY_ROLLBACK = "emergency.rollback_request"
+    OPERATOR_EXECUTE = "operator.execute_request"
 
 
 class FunnelCreateRequest(BaseModel):

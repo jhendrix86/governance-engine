@@ -55,10 +55,34 @@ class GovernanceService:
             
             # Store decision in history
             self._decision_history[decision.decision_id] = decision
-            
-            # Emit governance event
-            await self.event_emitter.emit_decision(decision, trace_parent)
-            
+
+            # Emit governance event - best-effort audit/observability only.
+            # Real bug found 2026-08-11 (via actual execution, not code
+            # reading): get_governance_service() (the FastAPI dependency)
+            # builds a fresh EventEmitter per request that's never
+            # .connect()ed - independent of main.py's own properly-connected
+            # startup-time instance, which nothing here actually uses. That
+            # meant this call unconditionally raised AttributeError on every
+            # single /governance/check request, and - since it wasn't
+            # isolated from the try/except below - threw away the real
+            # decision rule_engine.evaluate() had just computed correctly,
+            # turning every check into success=False regardless of the
+            # actual policy outcome. A rule decision that's already been
+            # made must not be discarded because publishing it failed.
+            # Deeper fix (making the dependency reuse a real connected
+            # publisher, or reconnect on failure) is a real architecture
+            # question, not resolved here - this narrower fix makes the
+            # decision itself correct and independently verifiable without
+            # live RabbitMQ, same discipline as the rest of this bug.
+            try:
+                await self.event_emitter.emit_decision(decision, trace_parent)
+            except Exception as emit_error:
+                logger.warning(
+                    "governance_event_emit_failed",
+                    decision_id=decision.decision_id,
+                    error=str(emit_error),
+                )
+
             # Finish trace
             self.tracer.finish_span(trace_parent, "governance.check", True)
             
