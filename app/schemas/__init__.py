@@ -20,6 +20,8 @@ from .decision_schemas import (
     GovernanceDecision,
     GovernanceCheckRequest,
     GovernanceCheckResponse,
+    OperatorActionLog,
+    LogActionRequest,
 )
 from .rule_schemas import (
     Rule,
@@ -49,6 +51,8 @@ __all__ = [
     "GovernanceDecision",
     "GovernanceCheckRequest",
     "GovernanceCheckResponse",
+    "OperatorActionLog",
+    "LogActionRequest",
     # Rule Schemas
     "Rule",
     "RuleCategory",

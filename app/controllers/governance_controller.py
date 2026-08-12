@@ -1,7 +1,7 @@
 from fastapi import APIRouter, HTTPException, Depends
 from typing import Dict, Any, Optional
 import structlog
-from ..schemas import GovernanceCheckRequest, GovernanceCheckResponse
+from ..schemas import GovernanceCheckRequest, GovernanceCheckResponse, LogActionRequest
 from ..rules import RuleEngine
 from ..services import GovernanceService
 from ..tracing import Tracer, TraceParent
@@ -61,6 +61,33 @@ async def check_governance(
     except Exception as e:
         logger.error("api_check_error", error=str(e))
         tracer.finish_span(trace_parent, "api.check_governance", False, error=str(e))
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/log-action")
+async def log_action(
+    request: LogActionRequest,
+    governance_service: GovernanceService = Depends(get_governance_service),
+):
+    """
+    Record an operator execution outcome (distinct from /check's policy
+    decisions). Added 2026-08-11 to close a real gap: empire_os's
+    GovernanceEngine bridge (engines/governance_engine.py) has called this
+    exact path since the Stage 3.2 governance bridge - it always 404'd,
+    silently swallowed by a broad except on the caller's side, so this
+    audit trail has never actually recorded anything until now.
+    """
+    try:
+        entry = governance_service.log_action(
+            operator_name=request.operator_name,
+            operator_type=request.operator_type,
+            result_success=request.result_success,
+            context=request.context,
+            logged_by=request.requester,
+        )
+        return {"success": True, "entry": entry.dict()}
+    except Exception as e:
+        logger.error("api_log_action_error", error=str(e))
         raise HTTPException(status_code=500, detail=str(e))
 
 

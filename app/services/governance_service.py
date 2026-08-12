@@ -1,7 +1,9 @@
-from typing import Dict, Any, Optional
+from typing import Dict, Any, List, Optional
 import structlog
 from ..rules import RuleEngine
-from ..schemas.decision_schemas import GovernanceDecision, GovernanceCheckRequest, GovernanceCheckResponse
+from ..schemas.decision_schemas import (
+    GovernanceDecision, GovernanceCheckRequest, GovernanceCheckResponse, OperatorActionLog,
+)
 from ..tracing import Tracer, TraceParent
 from ..services import EventEmitter
 
@@ -24,7 +26,12 @@ class GovernanceService:
         
         # Decision history (in production, this would be in a database)
         self._decision_history: Dict[str, GovernanceDecision] = {}
-    
+        # Operator execution outcomes - distinct from _decision_history
+        # (policy decisions). Same "in production, this would be a
+        # database" acceptance as the rest of this service's in-memory
+        # state; nothing else in this fleet reads this back yet.
+        self._action_log: List[OperatorActionLog] = []
+
     async def check_governance(
         self,
         request: GovernanceCheckRequest,
@@ -104,6 +111,27 @@ class GovernanceService:
                 processing_time_ms=0.0
             )
     
+    def log_action(
+        self, operator_name: str, operator_type: str, result_success: bool,
+        context: Dict[str, Any], logged_by: str,
+    ) -> OperatorActionLog:
+        """
+        Record an operator execution outcome. Best-effort by design (same
+        as event emission above) - a caller logging an audit trail entry
+        should never be blocked by it, so this method itself never raises;
+        callers that want a hard guarantee should check the return value.
+        """
+        entry = OperatorActionLog(
+            operator_name=operator_name, operator_type=operator_type,
+            result_success=result_success, context=context, logged_by=logged_by,
+        )
+        self._action_log.append(entry)
+        logger.info(
+            "operator_action_logged", operator_name=operator_name,
+            operator_type=operator_type, result_success=result_success,
+        )
+        return entry
+
     def get_decision_history(self, entity_id: str) -> list:
         """Get governance history for an entity."""
         # In production, this would query a database

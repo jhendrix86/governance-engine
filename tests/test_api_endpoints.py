@@ -87,6 +87,28 @@ class TestGovernanceEndpoints:
         evaluated_rule_ids = {r["rule_id"] for r in body["decision"]["rule_evaluations"]}
         assert evaluated_rule_ids == {"safety_002", "risk_002"}
 
+    def test_log_action(self):
+        """
+        POST /governance/log-action - real gap closed 2026-08-11.
+        empire_os's GovernanceEngine._log_governance_action() has called
+        this exact path since the Stage 3.2 governance bridge; it always
+        404'd until now (see empire_os's governance_engine.py docstring,
+        now updated). Uses the exact payload shape that caller sends -
+        no requester field - proving the default still works.
+        """
+        response = client.post("/governance/log-action", json={
+            "operator_name": "SomeOperator",
+            "operator_type": "generic",
+            "result_success": True,
+            "context": {"tenant_id": "t1"},
+        })
+        assert response.status_code == 200
+        body = response.json()
+        assert body["success"] is True
+        assert body["entry"]["operator_name"] == "SomeOperator"
+        assert body["entry"]["result_success"] is True
+        assert body["entry"]["logged_by"] == "unknown"
+
     def test_get_rules(self):
         response = client.get("/governance/rules")
         assert response.status_code == 200

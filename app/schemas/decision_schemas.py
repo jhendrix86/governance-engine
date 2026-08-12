@@ -58,3 +58,35 @@ class GovernanceCheckResponse(BaseModel):
     error: Optional[str] = Field(None, description="Error message if failed")
     trace_id: str = Field(..., description="Trace ID for distributed tracing")
     processing_time_ms: float = Field(..., description="Processing time in milliseconds")
+
+
+class OperatorActionLog(BaseModel):
+    """
+    Audit record of an operator's execution OUTCOME - distinct from a
+    GovernanceDecision, which records a POLICY decision (was this allowed).
+    This is the "what actually happened when it ran" side, requested by
+    empire_os's GovernanceEngine bridge (engines/governance_engine.py)
+    since 2026-08-10's Stage 3.2 work, but with no real endpoint to receive
+    it until now - every call 404'd, silently swallowed by a broad except.
+    """
+    operator_name: str = Field(..., description="Name of the executed operator")
+    operator_type: str = Field(..., description="Type of operator")
+    result_success: bool = Field(..., description="Whether execution succeeded")
+    context: Dict[str, Any] = Field(default_factory=dict, description="Execution context")
+    logged_by: str = Field(..., description="Engine/service that logged this")
+    logged_at: datetime = Field(default_factory=datetime.utcnow)
+
+    class Config:
+        json_encoders = {datetime: lambda v: v.isoformat()}
+
+
+class LogActionRequest(BaseModel):
+    """Request body for POST /governance/log-action - matches exactly what
+    empire_os's GovernanceEngine._log_governance_action() sends today
+    (which doesn't include a requester field); `requester` is optional so
+    other, better-behaved future callers can identify themselves."""
+    operator_name: str
+    operator_type: str
+    result_success: bool
+    context: Dict[str, Any] = Field(default_factory=dict)
+    requester: str = Field(default="unknown")
