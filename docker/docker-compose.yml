@@ -3,8 +3,14 @@ version: '3.8'
 services:
   governance-engine:
     build:
-      context: ..
-      dockerfile: docker/Dockerfile
+      # Workspace root, not just this repo - needed to reach the
+      # autonomy-events sibling package the Dockerfile copies in (see its
+      # own comment for why). Run `docker compose -f
+      # docker/docker-compose.yml build` from governance-engine/ as
+      # before; this context path is relative to this compose file's own
+      # location either way.
+      context: ../..
+      dockerfile: governance-engine/docker/Dockerfile
     container_name: governance-engine
     ports:
       - "8033:8033"
