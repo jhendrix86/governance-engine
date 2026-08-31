@@ -18,17 +18,32 @@ def get_rule_engine():
 
 
 def get_governance_service():
-    """Dependency for governance service."""
+    """Dependency for governance service.
+
+    Wires the service to the app-level EventEmitter that `startup_event()`
+    in `app/main.py` already `.connect()`ed to RabbitMQ - NOT a fresh one.
+    A fresh `EventEmitter(settings.rabbitmq_url)` has `_publisher = None`,
+    so `emit_decision()` AttributeErrors on every governance decision
+    (currently swallowed by governance_service.py's try/except, so
+    decisions silently never emit their audit event). Same pattern as
+    global-state-manager's get_state_manager().
+    """
     from ..services.governance_service import GovernanceService
+    from .. import main as app_main
+
+    # Production path: startup_event() has run, so use its RabbitMQ-connected
+    # EventEmitter (and the rule_engine/tracer alongside it).
+    if app_main.event_emitter is not None:
+        return GovernanceService(app_main.rule_engine, app_main.event_emitter, app_main.tracer)
+
+    # Fallback: startup hasn't run (e.g. TestClient with no lifespan
+    # context). Fresh instances; event emission is best-effort here and
+    # governance_service.check_governance() already tolerates a failed
+    # publish without discarding the decision.
     from ..services.event_emitter import EventEmitter
     from ..utils.config import settings
     from ..tracing import Tracer
-    
-    tracer = Tracer("governance-engine")
-    rule_engine = RuleEngine()
-    event_emitter = EventEmitter(settings.rabbitmq_url)
-    
-    return GovernanceService(rule_engine, event_emitter, tracer)
+    return GovernanceService(RuleEngine(), EventEmitter(settings.rabbitmq_url), Tracer("governance-engine"))
 
 
 def get_tracer():
