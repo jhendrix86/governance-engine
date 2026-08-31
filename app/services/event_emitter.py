@@ -1,4 +1,5 @@
 from typing import Dict, Any
+import uuid
 import structlog
 from autonomy_events import EventPublisher, EventEnvelope, EventPriority, TraceParent
 from ..schemas.decision_schemas import GovernanceDecision, DecisionStatus
@@ -37,21 +38,8 @@ class EventEmitter:
     ):
         """Emit a governance decision event."""
         event_type = self._map_decision_to_event(decision.status)
-        
-        payload = {
-            "decision_id": decision.decision_id,
-            "request_id": decision.request_id,
-            "request_type": decision.request_type,
-            "approved": decision.approved,
-            "status": decision.status.value,
-            "confidence": decision.confidence,
-            "rationale": decision.rationale,
-            "conditions": decision.conditions,
-            "rule_evaluations": decision.rule_evaluations,
-            "evaluated_by": decision.evaluated_by,
-            "metadata": decision.metadata
-        }
-        
+        payload = self._build_decision_payload(event_type, decision)
+
         envelope = EventEnvelope(
             event_type=event_type,
             engine_id=decision.evaluated_by,
@@ -67,10 +55,15 @@ class EventEmitter:
             envelope.correlation_id = decision.correlation_id
             envelope.causation_id = decision.causation_id
         
-        # Publish event
-        routing_key = f"governance.{event_type}"
+        # Publish event. event_type is already the fully dotted key
+        # (e.g. "governance.approved") - prefixing it again produced
+        # "governance.governance.approved", a 3-segment key that never
+        # matched kg-service's single-wildcard "governance.*" binding
+        # (topic-exchange "*" matches exactly one word). Every governance
+        # event was silently unroutable to kg-service until this fix.
+        routing_key = event_type
         result = await self._publisher.publish(envelope, routing_key, trace_parent)
-        
+
         if result.success:
             logger.info(
                 "governance_event_emitted",
@@ -95,15 +88,18 @@ class EventEmitter:
         trace_parent: TraceParent = None
     ):
         """Emit a governance override event."""
-        from datetime import datetime
+        # Payload shape must match autonomy_events' GovernanceOverride
+        # schema, not this method's own param names - see emit_decision's
+        # docstring for why that mismatch was previously invisible.
         payload = {
-            "override_type": override_type,
-            "entity_id": entity_id,
-            "reason": reason,
-            "requester": requester,
-            "timestamp": datetime.utcnow().isoformat()
+            "original_request_id": entity_id,
+            "override_by": requester,
+            "override_reason": reason,
+            "override_token": str(uuid.uuid4()),
+            "risk_assessment": {},
+            "requires_approval": False,
         }
-        
+
         envelope = EventEnvelope(
             event_type="governance.override",
             engine_id="governance-engine",
@@ -134,15 +130,17 @@ class EventEmitter:
         trace_parent: TraceParent = None
     ):
         """Emit an emergency stop event."""
+        # Payload shape must match autonomy_events' GovernanceEmergencyStop
+        # schema (scope/triggered_by are required there, not present here).
         payload = {
-            "entity_type": entity_type,
-            "entity_id": entity_id,
+            "scope": entity_type,
+            "scope_id": entity_id,
             "reason": reason,
+            "triggered_by": requester,
             "severity": severity,
-            "requester": requester,
-            "affected_entities": [entity_id]
+            "affected_entities": [entity_id],
         }
-        
+
         envelope = EventEnvelope(
             event_type="governance.emergency_stop",
             engine_id="governance-engine",
@@ -173,27 +171,32 @@ class EventEmitter:
         trace_parent: TraceParent = None
     ):
         """Emit a rollback triggered event."""
+        # There is no "governance.rollback_triggered" entry in
+        # autonomy_events' schema registry at all (only
+        # "safety.rollback_triggered" -> SafetyRollbackTriggered) - every
+        # publish here failed validation with "Unknown event type", not
+        # just a field mismatch. Reusing the existing safety schema
+        # instead of inventing a new registry entry unilaterally.
         payload = {
-            "entity_type": entity_type,
-            "entity_id": entity_id,
-            "rollback_point": rollback_point,
+            "rollback_type": entity_type,
+            "triggered_by": requester,
             "reason": reason,
-            "requester": requester,
-            "affected_entities": [entity_id]
+            "scope": {"entity_type": entity_type, "entity_id": entity_id, "rollback_point": rollback_point},
+            "affected_entities": [entity_id],
         }
-        
+
         envelope = EventEnvelope(
-            event_type="governance.rollback_triggered",
+            event_type="safety.rollback_triggered",
             engine_id="governance-engine",
             priority=EventPriority.HIGH,
             payload=payload
         )
-        
+
         if trace_parent:
             envelope.correlation_id = trace_parent.correlation_id
             envelope.causation_id = trace_parent.causation_id
-        
-        routing_key = "governance.rollback_triggered"
+
+        routing_key = "safety.rollback_triggered"
         result = await self._publisher.publish(envelope, routing_key, trace_parent)
         
         logger.info(
@@ -203,15 +206,69 @@ class EventEmitter:
         )
     
     def _map_decision_to_event(self, status: DecisionStatus) -> str:
-        """Map decision status to event type."""
+        """Map decision status to event type.
+
+        Must match a key in autonomy_events' EventValidator.SCHEMA_MAPPING
+        or every publish fails schema validation ("Unknown event type").
+        There is no "governance.conditional" schema in that registry - a
+        CONDITIONAL decision is "this request needs further approval",
+        which is exactly what GovernanceRequest already models, so it's
+        routed there instead of a status-specific type that doesn't exist.
+        """
         mapping = {
             DecisionStatus.APPROVED: "governance.approved",
             DecisionStatus.REJECTED: "governance.rejected",
-            DecisionStatus.CONDITIONAL: "governance.conditional",
+            DecisionStatus.CONDITIONAL: "governance.request",
             DecisionStatus.PENDING: "governance.request",
             DecisionStatus.OVERRIDDEN: "governance.override"
         }
         return mapping.get(status, "governance.request")
+
+    def _build_decision_payload(self, event_type: str, decision: GovernanceDecision) -> Dict[str, Any]:
+        """Build a payload conforming to the schema autonomy_events'
+        EventValidator will validate `event_type` against.
+
+        These payloads previously used this service's own internal
+        GovernanceDecision field names (decision_id, evaluated_by, ...),
+        which don't exist on any of the shared autonomy_events schemas -
+        every real publish failed schema validation. That failure was
+        masked until now by get_governance_service() handing out a
+        fresh, unconnected EventEmitter per request (fixed in e4fb96c),
+        which crashed on `self._publisher.publish(...)` with an
+        AttributeError before validation ever ran.
+        """
+        if event_type == "governance.approved":
+            conditions = decision.conditions or {}
+            return {
+                "request_id": decision.request_id,
+                "approved_by": decision.evaluated_by,
+                "conditions": list(conditions.keys()),
+                "expires_at": decision.expires_at,
+                "approval_token": decision.decision_id,
+                "scope": decision.metadata,
+            }
+        if event_type == "governance.rejected":
+            blocking = [
+                r for r in decision.rule_evaluations
+                if r.get("action") == "block" and r.get("triggered")
+            ]
+            return {
+                "request_id": decision.request_id,
+                "rejected_by": decision.evaluated_by,
+                "reason": decision.rationale,
+                "suggestions": [],
+                "violation_type": blocking[0].get("rule_name") if blocking else None,
+                "can_retry": True,
+            }
+        # governance.request (PENDING, and CONDITIONAL - see _map_decision_to_event)
+        return {
+            "request_id": decision.request_id,
+            "action_type": decision.request_type,
+            "payload": decision.conditions or {},
+            "requester": decision.evaluated_by,
+            "priority": "normal",
+            "context": decision.metadata,
+        }
     
     def _map_priority(self, status: DecisionStatus) -> EventPriority:
         """Map decision status to event priority."""
